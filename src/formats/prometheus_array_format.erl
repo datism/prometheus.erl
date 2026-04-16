@@ -9,17 +9,17 @@
 %%       `_count' suffixes)</li>
 %%   <li>`Type' is a lowercase atom: `counter', `gauge', `histogram',
 %%       `summary', or `untyped'</li>
-%%   <li>`Labels' is a proplist `[{BinaryName, BinaryValue}]'</li>
+%%   <li>`Labels' is a map `#{BinaryName => BinaryValue}'</li>
 %%   <li>`Value' is an integer or float</li>
 %% </ul>
 %%
 %% Example:
 %% ```
 %% prometheus_array_format:format().
-%% [{<<"http_requests_total">>, counter, [{<<"method">>, <<"GET">>}], 42},
-%%  {<<"latency_bucket">>,      histogram, [{<<"le">>, <<"1.0">>}],   5},
-%%  {<<"latency_sum">>,         histogram, [],                         2.3},
-%%  {<<"latency_count">>,       histogram, [],                         10}]
+%% [{<<"http_requests_total">>, counter, #{<<"method">> => <<"GET">>}, 42},
+%%  {<<"latency_bucket">>,      histogram, #{<<"le">> => <<"1.0">>},   5},
+%%  {<<"latency_sum">>,         histogram, #{},                         2.3},
+%%  {<<"latency_count">>,       histogram, #{},                         10}]
 %% '''
 -module(prometheus_array_format).
 
@@ -28,12 +28,12 @@
 -export([format/0, format/1]).
 
 %% @doc Exports metrics from the default registry.
--spec format() -> [{binary(), atom(), [{binary(), binary()}], number()}].
+-spec format() -> [{binary(), atom(), #{binary() => binary()}, number()}].
 format() ->
     format(default).
 
 %% @doc Exports metrics from the given registry.
--spec format(Registry :: atom()) -> [{binary(), atom(), [{binary(), binary()}], number()}].
+-spec format(Registry :: atom()) -> [{binary(), atom(), #{binary() => binary()}, number()}].
 format(Registry) ->
     MFs = collect_mfs(Registry),
     lists:flatmap(fun mf_to_tuples/1, MFs).
@@ -73,7 +73,7 @@ metric_to_tuples(Name, T, #'Metric'{label = Labels, untyped = #'Untyped'{value =
 metric_to_tuples(Name, T, #'Metric'{label = Labels,
         summary = #'Summary'{sample_count = C, sample_sum = S, quantile = Qs}}) ->
     Base = extract_labels(Labels),
-    QTerms = [{Name, T, Base ++ [{<<"quantile">>, format_float(Q)}], V}
+    QTerms = [{Name, T, Base#{<<"quantile">> => format_float(Q)}, V}
               || #'Quantile'{quantile = Q, value = V} <- Qs],
     QTerms ++ [
         {<<Name/binary, "_sum">>,   T, Base, S},
@@ -83,7 +83,7 @@ metric_to_tuples(Name, T, #'Metric'{label = Labels,
         histogram = #'Histogram'{sample_count = C, sample_sum = S, bucket = Bs}}) ->
     Base = extract_labels(Labels),
     BTerms = [{<<Name/binary, "_bucket">>, T,
-               Base ++ [{<<"le">>, format_bound(UB)}], CC}
+               Base#{<<"le">> => format_bound(UB)}, CC}
               || #'Bucket'{upper_bound = UB, cumulative_count = CC} <- Bs],
     BTerms ++ [
         {<<Name/binary, "_sum">>,   T, Base, S},
@@ -91,10 +91,15 @@ metric_to_tuples(Name, T, #'Metric'{label = Labels,
     ].
 
 extract_labels(Labels) when is_list(Labels) ->
-    [{iolist_to_binary(N), iolist_to_binary(V)}
-     || #'LabelPair'{name = N, value = V} <- Labels];
+    lists:foldl(
+        fun(#'LabelPair'{name = N, value = V}, Acc) ->
+            Acc#{iolist_to_binary(N) => iolist_to_binary(V)}
+        end,
+        #{},
+        Labels
+    );
 extract_labels(_) ->
-    [].
+    #{}.
 
 format_bound(infinity) ->
     <<"+Inf">>;
